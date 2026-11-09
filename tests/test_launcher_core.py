@@ -20,8 +20,8 @@ class RunSpecTests(unittest.TestCase):
 
     def test_serial_uses_input_directory(self):
         spec = build_run_spec(str(self.exe), str(self.input_file))
-        self.assertEqual(spec.working_directory, self.input_file.parent)
-        self.assertEqual(spec.command, [str(self.exe), "-in", "vibrating_screen.txt"])
+        self.assertEqual(spec.working_directory, self.input_file.parent.resolve())
+        self.assertEqual(spec.command, [str(self.exe.resolve()), "-in", "vibrating_screen.txt"])
 
     def test_echo_argument(self):
         spec = build_run_spec(str(self.exe), str(self.input_file), echo=True)
@@ -32,8 +32,8 @@ class RunSpecTests(unittest.TestCase):
         mpiexec.write_text("", encoding="utf-8")
         spec = build_run_spec(str(self.exe), str(self.input_file),
                               parallel=True, processes=8, mpiexec=str(mpiexec))
-        self.assertEqual(spec.command[:3], [str(mpiexec), "-n", "8"])
-        self.assertEqual(spec.command[-3:], [str(self.exe), "-in", "vibrating_screen.txt"])
+        self.assertEqual(spec.command[:3], [str(mpiexec.resolve()), "-n", "8"])
+        self.assertEqual(spec.command[-3:], [str(self.exe.resolve()), "-in", "vibrating_screen.txt"])
 
     def test_parallel_on_path(self):
         with patch("launcher_core.shutil.which", return_value="C:/MPI/mpiexec.exe"):
