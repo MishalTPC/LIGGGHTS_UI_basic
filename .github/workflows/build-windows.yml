@@ -1,0 +1,39 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Install PyInstaller
+        run: python -m pip install "pyinstaller>=6.15,<7"
+
+      - name: Build portable GUI executable
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name LIGGGHTS_UI_basic --version-file version_info.txt liggghts_ui.py
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIGGGHTS_UI_basic_Windows_v1.0.0
+          path: dist/LIGGGHTS_UI_basic.exe
+          if-no-files-found: error
+          retention-days: 90
