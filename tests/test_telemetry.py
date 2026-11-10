@@ -28,10 +28,10 @@ class TestTelemetry(unittest.TestCase):
         self.assertIsNone(p.feed("100 10",1).percent)
 
     def test_split_thermo_across_reads(self):
-        rows, partial = split_complete_lines("", "Step Atoms KinEng\\n0 0")
+        rows, partial = split_complete_lines("", "Step Atoms KinEng\n0 0")
         self.assertEqual(rows, ["Step Atoms KinEng"])
         self.assertEqual(partial, "0 0")
-        rows, partial = split_complete_lines(partial, " 0\\n1000 25 1.0\\n")
+        rows, partial = split_complete_lines(partial, " 0\n1000 25 1.0\n")
         self.assertEqual(rows, ["0 0 0", "1000 25 1.0"])
         self.assertEqual(partial, "")
 
