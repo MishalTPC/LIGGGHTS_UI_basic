@@ -1,7 +1,7 @@
 """Command construction for the LIGGGHTS Windows launcher.
 
 Author: Mishal Mohanlal
-Version: 1.1.0
+Version: 1.1.1
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "LIGGGHTS UI Basic"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_AUTHOR = "Mishal Mohanlal"
 
 

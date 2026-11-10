@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 0, 0),
-    prodvers=(1, 1, 0, 0),
+    filevers=(1, 1, 1, 0),
+    prodvers=(1, 1, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -14,11 +14,11 @@ VSVersionInfo(
       StringTable('040904B0', [
         StringStruct('CompanyName', 'The Project Company'),
         StringStruct('FileDescription', 'LIGGGHTS Simulation Launcher'),
-        StringStruct('FileVersion', '1.1.0'),
+        StringStruct('FileVersion', '1.1.1'),
         StringStruct('InternalName', 'LIGGGHTS_UI_basic'),
         StringStruct('OriginalFilename', 'LIGGGHTS_UI_basic.exe'),
         StringStruct('ProductName', 'LIGGGHTS UI Basic'),
-        StringStruct('ProductVersion', '1.1.0'),
+        StringStruct('ProductVersion', '1.1.1'),
         StringStruct('LegalCopyright', 'Copyright (c) 2026 Mishal Mohanlal'),
         StringStruct('Comments', 'Author: Mishal Mohanlal')
       ])

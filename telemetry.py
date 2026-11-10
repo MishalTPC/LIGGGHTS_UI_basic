@@ -1,5 +1,5 @@
 """LIGGGHTS screen-output telemetry parser.
-Author: Mishal Mohanlal | v1.1.0
+Author: Mishal Mohanlal | v1.1.1
 """
 import re
 from dataclasses import dataclass,field
@@ -72,7 +72,8 @@ class Telemetry:
                 if self.prev_step is not None and self.prev_clock is not None:
                     dt=now-self.prev_clock
                     ds=step-self.prev_step
-                    if dt>0 and ds>0:
+                    # Buffered multi-line dumps are not reliable timing samples.
+                    if dt>=0.5 and ds>0:
                         m.rate=ds/dt
                         m.eta=max(0.,m.target-completed)/m.rate
             self.prev_step=step
@@ -91,3 +92,34 @@ def hms(seconds):
     hours,rest=divmod(max(0,int(seconds)),3600)
     minutes,secs=divmod(rest,60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+def split_complete_lines(remainder, chunk):
+    """Stream line framing: incomplete final lines are held for next poll."""
+    buffer = remainder + chunk
+    if not buffer:
+        return [], ""
+    lines = buffer.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\\r", "\\n")):
+        remainder = lines.pop()
+    else:
+        remainder = ""
+    return [line.rstrip("\\r\\n") for line in lines], remainder
+
+
+def prefer_metrics(console, solver_log):
+    """Choose the source with the most complete observed solver data.
+
+    Logs and stdout often contain duplicate lines. Using two independent
+    parsers avoids double counting meshes or warnings.
+    """
+    if solver_log.step is not None and (
+        console.step is None or solver_log.step >= console.step
+    ):
+        return solver_log
+    if console.step is not None:
+        return console
+    if solver_log.diagnostic and not console.diagnostic:
+        return solver_log
+    if solver_log.meshes > console.meshes:
+        return solver_log
+    return console

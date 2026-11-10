@@ -1,7 +1,7 @@
 """Desktop GUI to launch LIGGGHTS simulations on Windows.
 
 Author: Mishal Mohanlal
-Version: 1.1.0
+Version: 1.1.1
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from telemetry import Telemetry, input_target, hms
+from telemetry import Telemetry, input_target, hms, prefer_metrics, split_complete_lines
 from launcher_core import (
     APP_AUTHOR, APP_NAME, APP_VERSION, build_run_spec, command_as_text,
 )
@@ -86,11 +86,16 @@ class LiggghtsLauncher(tk.Tk):
         self.last_log_path: Path | None = None
         self.visible_lines = 0
         self.metrics = Telemetry()
+        self.log_metrics = Telemetry()
         self.clock_start = None
         self.last_activity = None
         self.solver_log_path = None
         self.log_cache = ""
         self.log_offset = 0
+        self.log_pending_line = ""
+        self.log_initial_signature = None
+        self.log_is_current = False
+        self.run_target = None
         self.phase_var = tk.StringVar(value="Idle")
         self.elapsed_var = tk.StringVar(value="00:00:00")
         self.step_var = tk.StringVar(value="—")
@@ -286,57 +291,102 @@ class LiggghtsLauncher(tk.Tk):
     def _dashboard_tick(self):
         if self.running and self.clock_start is not None:
             self.elapsed_var.set(hms(time.monotonic()-self.clock_start))
+            self._read_solver_log()
             if self.last_activity is None:
-                self.activity_var.set("Awaiting output — the solver may be buffering")
+                self.activity_var.set("Waiting for solver output — initializing or buffering")
             else:
                 idle=int(time.monotonic()-self.last_activity)
-                self.activity_var.set(
-                    f"Last console output {idle}s ago"+(" (possibly buffered)" if idle>10 else ""))
-            self._read_solver_log()
+                if idle > 30:
+                    self.activity_var.set(
+                        f"No new output for {idle}s — initializing, buffered, or stalled")
+                else:
+                    self.activity_var.set(f"Last solver output {idle}s ago")
         self.after(1000,self._dashboard_tick)
 
     def _read_solver_log(self):
-        path=self.solver_log_path
+        """Follow only this run's log.lammps; never reuse a stale previous run."""
+        path = self.solver_log_path
         if path is None:
             return
         try:
-            size=path.stat().st_size
-            if size<self.log_offset:
-                self.log_offset=0
-                self.log_cache=""
-            if size==self.log_offset: return
-            with path.open("rb") as f:
-                f.seek(self.log_offset)
-                chunk=f.read(min(512000,size-self.log_offset))
-                self.log_offset=f.tell()
-            self.log_cache=(self.log_cache+chunk.decode("utf-8",errors="replace"))[-400000:]
-            widget=self.solver_log_widget
+            st = path.stat()
+            signature = (st.st_size, st.st_mtime_ns)
+            if not self.log_is_current:
+                if signature == self.log_initial_signature:
+                    return
+                self.log_is_current = True
+                self.log_offset = 0
+                self.log_cache = ""
+                self.log_pending_line = ""
+                self.log_metrics = Telemetry(self.run_target)
+            size = st.st_size
+            if size < self.log_offset:
+                # Solver truncated or replaced its log.
+                self.log_offset = 0
+                self.log_cache = ""
+                self.log_pending_line = ""
+                self.log_metrics = Telemetry(self.run_target)
+            if size == self.log_offset:
+                return
+            with path.open("rb") as stream:
+                stream.seek(self.log_offset)
+                chunk = stream.read(min(512000, size - self.log_offset))
+                self.log_offset = stream.tell()
+            if not chunk:
+                return
+            now = time.monotonic()
+            self.last_activity = now
+            decoded = chunk.decode("utf-8", errors="replace")
+            self.log_cache = (self.log_cache + decoded)[-400000:]
+            complete, self.log_pending_line = split_complete_lines(
+                self.log_pending_line, decoded)
+            for row in complete:
+                self.log_metrics.feed(row, now)
+            widget = self.solver_log_widget
             widget.configure(state="normal")
-            widget.delete("1.0","end")
-            widget.insert("end",self.log_cache)
+            widget.delete("1.0", "end")
+            widget.insert("end", self.log_cache)
             widget.see("end")
             widget.configure(state="disabled")
+            self._show_metrics()
         except OSError:
             pass
 
-    def _read_metrics(self,line):
-        m=self.metrics.feed(line,time.monotonic())
+    def _read_metrics(self, line):
+        self.metrics.feed(line, time.monotonic())
+        self._show_metrics()
+
+    def _show_metrics(self):
+        m = prefer_metrics(self.metrics.data, self.log_metrics.data)
         self.phase_var.set(m.phase)
-        if m.step is not None: self.step_var.set(f"{m.step:,}")
-        if m.particles is not None: self.particle_var.set(f"{m.particles:,}")
-        self.mesh_var.set(str(m.meshes)+(" ("+m.last_mesh+")" if m.last_mesh!="—" else ""))
-        if m.rate is not None: self.rate_var.set(f"{m.rate:,.0f}")
-        if m.eta is not None: self.eta_var.set(hms(m.eta))
+        if m.step is not None:
+            self.step_var.set(f"{m.step:,}")
+        elif self.run_target is not None:
+            self.step_var.set("—")
+        if m.particles is not None:
+            self.particle_var.set(f"{m.particles:,}")
+        self.mesh_var.set(str(m.meshes) + (" (" + m.last_mesh + ")" if m.last_mesh != "—" else ""))
+        if m.rate is not None:
+            self.rate_var.set(f"{m.rate:,.0f}")
+        if m.eta is not None:
+            self.eta_var.set(hms(m.eta))
         if m.percent is not None:
             self.progress_value.set(m.percent)
-            self.progress_text.set(f"{m.percent:.1f}%")
+            if self.run_target is None:
+                self.progress_text.set(f"{m.percent:.1f}%")
+            else:
+                self.progress_text.set(f"{m.percent:.1f}% of {self.run_target:,} run steps")
+        elif self.run_target is not None:
+            self.progress_text.set(
+                f"Target: {self.run_target:,} steps — awaiting first timestep")
         else:
-            self.progress_text.set("Unknown until timestep data is available")
+            self.progress_text.set("Progress unknown — no numeric run target / timestep")
         if m.thermo:
-            fields=[(k,v) for k,v in m.thermo.items() if k.lower()!="step"][:7]
-            self.thermo_var.set("    ".join(f"{k}: {v}" for k,v in fields))
-        if m.diagnostic:
-            self.diagnostic_var.set("Last diagnostic: "+m.diagnostic[:130])
+            values = [(k,v) for k,v in m.thermo.items() if k.lower() != "step"][:7]
+            self.thermo_var.set("    ".join(f"{k}: {v}" for k,v in values))
+        diag = m.diagnostic or self.metrics.data.diagnostic or self.log_metrics.data.diagnostic
+        if diag:
+            self.diagnostic_var.set("Last diagnostic: " + diag[:130])
         elif m.warnings:
             self.diagnostic_var.set(f"Warnings: {m.warnings}")
 
@@ -459,17 +509,26 @@ class LiggghtsLauncher(tk.Tk):
 
         self._save_settings()
         self._clear_output()
-        self.metrics=Telemetry()
+        self.run_target = None
         try:
-            self.metrics=Telemetry(input_target(
-                spec.input_file.read_text(encoding="utf-8",errors="replace")))
+            self.run_target = input_target(
+                spec.input_file.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             pass
-        self.clock_start=time.monotonic()
-        self.last_activity=None
-        self.log_offset=0
-        self.log_cache=""
-        self.solver_log_path=spec.working_directory/"log.lammps"
+        self.metrics = Telemetry(self.run_target)
+        self.log_metrics = Telemetry(self.run_target)
+        self.clock_start = time.monotonic()
+        self.last_activity = None
+        self.log_offset = 0
+        self.log_cache = ""
+        self.log_pending_line = ""
+        self.log_is_current = False
+        self.solver_log_path = spec.working_directory / "log.lammps"
+        try:
+            stat = self.solver_log_path.stat()
+            self.log_initial_signature = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            self.log_initial_signature = None
         self.elapsed_var.set("00:00:00")
         self.step_var.set("—")
         self.particle_var.set("—")
@@ -477,7 +536,10 @@ class LiggghtsLauncher(tk.Tk):
         self.rate_var.set("—")
         self.eta_var.set("—")
         self.progress_value.set(0)
-        self.progress_text.set("Waiting for timestep output")
+        if self.run_target is not None:
+            self.progress_text.set(f"Target: {self.run_target:,} steps — awaiting first timestep")
+        else:
+            self.progress_text.set("Progress unknown — no numeric run target")
         self.phase_var.set("Launching solver")
         self.thermo_var.set("Waiting for thermodynamic data...")
         self.diagnostic_var.set("No diagnostics")
@@ -558,7 +620,7 @@ class LiggghtsLauncher(tk.Tk):
                 else:
                     self.status_var.set(f"Failed (exit code {code})")
                     self.phase_var.set("Solver terminated")
-                    if not self.metrics.data.diagnostic:
+                    if not (self.metrics.data.diagnostic or self.log_metrics.data.diagnostic):
                         self.diagnostic_var.set("Nonzero exit; inspect solver log and full run log")
                     self._append_line(f"Simulation exited with code {code}.")
                 self._append_line(f"Full log: {path}")

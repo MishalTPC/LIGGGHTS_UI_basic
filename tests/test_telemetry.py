@@ -1,6 +1,6 @@
 """Test realistic LIGGGHTS output samples."""
 import unittest
-from telemetry import Telemetry,input_target,hms
+from telemetry import Telemetry,input_target,hms,split_complete_lines,prefer_metrics
 
 class TestTelemetry(unittest.TestCase):
     def test_thermo(self):
@@ -26,6 +26,35 @@ class TestTelemetry(unittest.TestCase):
         p=Telemetry()
         p.feed("Step Atoms",0)
         self.assertIsNone(p.feed("100 10",1).percent)
+
+    def test_split_thermo_across_reads(self):
+        rows, partial = split_complete_lines("", "Step Atoms KinEng\\n0 0")
+        self.assertEqual(rows, ["Step Atoms KinEng"])
+        self.assertEqual(partial, "0 0")
+        rows, partial = split_complete_lines(partial, " 0\\n1000 25 1.0\\n")
+        self.assertEqual(rows, ["0 0 0", "1000 25 1.0"])
+        self.assertEqual(partial, "")
+
+    def test_solver_log_fallback(self):
+        stdout = Telemetry(1000)
+        log = Telemetry(1000)
+        stdout.feed("Setting up run", 0)
+        log.feed("Step Atoms KinEng", 0)
+        log.feed("0 0 0", 1)
+        log.feed("1000 25 1.0", 2)
+        m = prefer_metrics(stdout.data, log.data)
+        self.assertEqual(m.step, 1000)
+        self.assertEqual(m.particles, 25)
+        self.assertEqual(m.percent, 100)
+
+    def test_duplicate_output_kept_separate(self):
+        stdout = Telemetry()
+        log = Telemetry()
+        msg = "Import and parallelization of mesh body_S containing 36 triangle(s) successful"
+        stdout.feed(msg, 0)
+        log.feed(msg, 0)
+        m = prefer_metrics(stdout.data, log.data)
+        self.assertEqual(m.meshes, 1)
 
     def test_targets(self):
         self.assertEqual(input_target("# run 300\nrun 40000"),40000)
