@@ -99,11 +99,11 @@ def split_complete_lines(remainder, chunk):
     if not buffer:
         return [], ""
     lines = buffer.splitlines(keepends=True)
-    if lines and not lines[-1].endswith(("\\r", "\\n")):
+    if lines and not lines[-1].endswith(("\r", "\n")):
         remainder = lines.pop()
     else:
         remainder = ""
-    return [line.rstrip("\\r\\n") for line in lines], remainder
+    return [line.rstrip("\r\n") for line in lines], remainder
 
 
 def prefer_metrics(console, solver_log):
