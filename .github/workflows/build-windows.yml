@@ -36,7 +36,7 @@ jobs:
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
-          name: LIGGGHTS_UI_basic_Windows_v1.2.0
+          name: LIGGGHTS_UI_basic_Windows_v1.2.1
           path: dist/LIGGGHTS_UI_basic.exe
           if-no-files-found: error
           retention-days: 90

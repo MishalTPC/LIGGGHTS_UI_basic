@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-echo Building LIGGGHTS UI Basic v1.2.0 - Mishal Mohanlal
+echo Building LIGGGHTS UI Basic v1.2.1 - Mishal Mohanlal
 py -3 -m pip install "pyinstaller>=6.15,<7"
 if errorlevel 1 goto fail
 py -3 -m unittest discover -s tests -v

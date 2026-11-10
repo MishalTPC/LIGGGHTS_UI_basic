@@ -1,7 +1,7 @@
 """Desktop GUI to launch LIGGGHTS simulations on Windows.
 
 Author: Mishal Mohanlal
-Version: 1.2.0
+Version: 1.2.1
 """
 from __future__ import annotations
 
@@ -97,11 +97,7 @@ class LiggghtsLauncher(tk.Tk):
         self.run_target = None
         self.phase_var = tk.StringVar(value="Idle")
         self.elapsed_var = tk.StringVar(value="00:00:00")
-        self.step_var = tk.StringVar(value="—")
-        self.particle_var = tk.StringVar(value="—")
         self.mesh_var = tk.StringVar(value="0")
-        self.rate_var = tk.StringVar(value="—")
-        self.eta_var = tk.StringVar(value="—")
         self.progress_text = tk.StringVar(value="Waiting for timestep output")
         self.progress_value = tk.DoubleVar(value=0)
         self.thermo_var = tk.StringVar(value="Thermodynamic results will appear when the solver reports them.")
@@ -251,9 +247,7 @@ class LiggghtsLauncher(tk.Tk):
         ttk.Label(heading,textvariable=self.phase_var,style="Section.TLabel").pack(side="right")
         metrics=ttk.Frame(panel,style="Card.TFrame")
         metrics.pack(fill="x",pady=(8,6))
-        items=[("ELAPSED",self.elapsed_var),("TIMESTEP",self.step_var),
-               ("PARTICLES",self.particle_var),("MESHES",self.mesh_var),
-               ("STEPS / SEC",self.rate_var),("ETA",self.eta_var)]
+        items=[("ELAPSED",self.elapsed_var),("MESHES",self.mesh_var)]
         for i,(label,var) in enumerate(items):
             metrics.columnconfigure(i,weight=1)
             tile=tk.Frame(metrics,bg="#eaf2f9",padx=10,pady=7)
@@ -345,19 +339,9 @@ class LiggghtsLauncher(tk.Tk):
     def _show_metrics(self):
         m = prefer_metrics(self.metrics.data, self.log_metrics.data)
         self.phase_var.set(m.phase)
-        if m.step is not None:
-            self.step_var.set(f"{m.step:,}")
-        elif self.run_target is not None:
-            self.step_var.set("—")
-        if m.particles is not None:
-            self.particle_var.set(f"{m.particles:,}")
-        mesh_state = self.log_metrics.data if self.log_metrics.data.meshes > self.metrics.data.meshes else self.metrics.data
+         mesh_state = self.log_metrics.data if self.log_metrics.data.meshes > self.metrics.data.meshes else self.metrics.data
         self.mesh_var.set(str(mesh_state.meshes) + (
             " (" + mesh_state.last_mesh + ")" if mesh_state.last_mesh != "—" else ""))
-        if m.rate is not None:
-            self.rate_var.set(f"{m.rate:,.0f}")
-        if m.eta is not None:
-            self.eta_var.set(hms(m.eta))
         if m.percent is not None:
             self.progress_value.set(m.percent)
             if self.run_target is None:
@@ -535,11 +519,7 @@ class LiggghtsLauncher(tk.Tk):
         except OSError:
             self.log_initial_signature = None
         self.elapsed_var.set("00:00:00")
-        self.step_var.set("—")
-        self.particle_var.set("—")
         self.mesh_var.set("0")
-        self.rate_var.set("—")
-        self.eta_var.set("—")
         self.progress_value.set(0)
         if self.run_target is not None:
             self.progress_text.set(f"Target: {self.run_target:,} steps — awaiting first timestep")
