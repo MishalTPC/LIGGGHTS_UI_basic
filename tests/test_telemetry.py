@@ -1,6 +1,6 @@
 """Test realistic LIGGGHTS output samples."""
 import unittest
-from telemetry import Telemetry,input_target,hms,split_complete_lines,prefer_metrics
+from telemetry import Telemetry,input_target,hms,split_complete_lines,prefer_metrics,line_severity
 
 class TestTelemetry(unittest.TestCase):
     def test_thermo(self):
@@ -55,6 +55,19 @@ class TestTelemetry(unittest.TestCase):
         log.feed(msg, 0)
         m = prefer_metrics(stdout.data, log.data)
         self.assertEqual(m.meshes, 1)
+
+    def test_completed_operation_and_highlights(self):
+        p=Telemetry()
+        p.feed("Created orthogonal box = (0 0 0) to (10 10 10)", 0)
+        self.assertEqual(p.data.last_operation, "Simulation domain created")
+        p.feed("Import and parallelization of mesh body_S containing 36 triangle(s) successful", 1)
+        self.assertEqual(p.data.last_operation, "Imported mesh body_S (36 triangles)")
+        p.feed("WARNING: high aspect ratio", 2)
+        self.assertEqual(p.data.warnings, 1)
+        self.assertEqual(p.data.last_operation, "Imported mesh body_S (36 triangles)")
+        self.assertEqual(line_severity("WARNING: high aspect ratio"), "warning")
+        self.assertEqual(line_severity("aborting MPI_COMM_WORLD"), "error")
+        self.assertEqual(line_severity("Import and parallelization of mesh x containing 3 triangle(s) successful"), "success")
 
     def test_targets(self):
         self.assertEqual(input_target("# run 300\nrun 40000"),40000)

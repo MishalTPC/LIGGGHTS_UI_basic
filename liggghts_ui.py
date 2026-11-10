@@ -1,7 +1,7 @@
 """Desktop GUI to launch LIGGGHTS simulations on Windows.
 
 Author: Mishal Mohanlal
-Version: 1.1.1
+Version: 1.2.0
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from telemetry import Telemetry, input_target, hms, prefer_metrics, split_complete_lines
+from telemetry import Telemetry, input_target, hms, prefer_metrics, split_complete_lines, line_severity
 from launcher_core import (
     APP_AUTHOR, APP_NAME, APP_VERSION, build_run_spec, command_as_text,
 )
@@ -90,7 +90,6 @@ class LiggghtsLauncher(tk.Tk):
         self.clock_start = None
         self.last_activity = None
         self.solver_log_path = None
-        self.log_cache = ""
         self.log_offset = 0
         self.log_pending_line = ""
         self.log_initial_signature = None
@@ -108,7 +107,8 @@ class LiggghtsLauncher(tk.Tk):
         self.thermo_var = tk.StringVar(value="Thermodynamic results will appear when the solver reports them.")
         self.diagnostic_var = tk.StringVar(value="No diagnostics")
         self.activity_var = tk.StringVar(value="No output received")
-        self.output_view = tk.StringVar(value="Console")
+        self.last_operation_var = tk.StringVar(value="Last completed operation: none reported")
+        self.warning_count_var = tk.StringVar(value="Warnings: 0")
 
         self._configure_style()
         self._build_ui()
@@ -215,18 +215,15 @@ class LiggghtsLauncher(tk.Tk):
         self.stop_button.pack(side="left", padx=(8, 0))
         ttk.Button(controls, text="Open Simulation Folder", style="Action.TButton",
                    command=self._open_folder).pack(side="left", padx=(8, 0))
-        ttk.Button(controls, text="Open Full Log", style="Action.TButton",
-                   command=self._open_log).pack(side="left", padx=(8, 0))
+        self.logs_button = ttk.Button(controls, text="Open Logs ▾", style="Action.TButton",
+                                      command=self._open_logs_menu)
+        self.logs_button.pack(side="left", padx=(8, 0))
         ttk.Button(controls, text="Clear Output", style="Action.TButton",
                    command=self._clear_output).pack(side="right")
 
         log_header = ttk.Frame(outer, style="App.TFrame")
         log_header.pack(fill="x", pady=(0, 5))
         ttk.Label(log_header, text="Simulation output", style="App.TLabel").pack(side="left")
-        ttk.Radiobutton(log_header,text="Live console",value="Console",
-                        variable=self.output_view,command=self._switch_view).pack(side="left",padx=12)
-        ttk.Radiobutton(log_header,text="log.lammps",value="Solver log",
-                        variable=self.output_view,command=self._switch_view).pack(side="left")
         self.status_label = ttk.Label(log_header, textvariable=self.status_var,
                                        style="App.TLabel")
         self.status_label.pack(side="right")
@@ -237,11 +234,10 @@ class LiggghtsLauncher(tk.Tk):
             selectbackground="#266a86", relief="flat", padx=11, pady=10,
             state="disabled", height=12,
         )
+        self.console.tag_configure("error", foreground="#ff9696")
+        self.console.tag_configure("warning", foreground="#ffca80")
+        self.console.tag_configure("success", foreground="#8ee2b5")
         self.console.pack(fill="both", expand=True)
-        self.solver_log_widget = scrolledtext.ScrolledText(
-            outer,wrap="word",font=("Consolas",9),background="#101e32",
-            foreground="#d9e8f7",relief="flat",padx=11,pady=10,state="disabled")
-        self._switch_view()
         ttk.Label(outer, style="Footer.TLabel",
                   text="Working directory = input file's folder  |  All output is also saved to run_logs/  |  LIGGGHTS and MPI are not bundled").pack(
                       anchor="w", pady=(9, 0))
@@ -278,15 +274,14 @@ class LiggghtsLauncher(tk.Tk):
         row=ttk.Frame(panel,style="Card.TFrame")
         row.pack(fill="x",pady=(7,0))
         ttk.Label(row,textvariable=self.activity_var,style="Card.TLabel").pack(side="left")
-        ttk.Label(row,textvariable=self.diagnostic_var,style="Card.TLabel").pack(side="right")
-
-    def _switch_view(self):
-        if self.output_view.get()=="Solver log":
-            self.console.pack_forget()
-            self.solver_log_widget.pack(fill="both",expand=True)
-        else:
-            self.solver_log_widget.pack_forget()
-            self.console.pack(fill="both",expand=True)
+        ttk.Label(row,textvariable=self.warning_count_var,style="Card.TLabel").pack(side="right")
+        tk.Label(panel,textvariable=self.last_operation_var,bg="#ffffff",fg=BLUE,
+                 anchor="w",justify="left",wraplength=980,
+                 font=("Segoe UI",9)).pack(fill="x",pady=(5,0))
+        self.diagnostic_label=tk.Label(panel,textvariable=self.diagnostic_var,
+                 bg="#ffffff",fg="#8c4a12",anchor="w",justify="left",
+                 wraplength=980,font=("Segoe UI",9))
+        self.diagnostic_label.pack(fill="x",pady=(3,0))
 
     def _dashboard_tick(self):
         if self.running and self.clock_start is not None:
@@ -316,14 +311,12 @@ class LiggghtsLauncher(tk.Tk):
                     return
                 self.log_is_current = True
                 self.log_offset = 0
-                self.log_cache = ""
                 self.log_pending_line = ""
                 self.log_metrics = Telemetry(self.run_target)
             size = st.st_size
             if size < self.log_offset:
                 # Solver truncated or replaced its log.
                 self.log_offset = 0
-                self.log_cache = ""
                 self.log_pending_line = ""
                 self.log_metrics = Telemetry(self.run_target)
             if size == self.log_offset:
@@ -337,17 +330,10 @@ class LiggghtsLauncher(tk.Tk):
             now = time.monotonic()
             self.last_activity = now
             decoded = chunk.decode("utf-8", errors="replace")
-            self.log_cache = (self.log_cache + decoded)[-400000:]
             complete, self.log_pending_line = split_complete_lines(
                 self.log_pending_line, decoded)
             for row in complete:
                 self.log_metrics.feed(row, now)
-            widget = self.solver_log_widget
-            widget.configure(state="normal")
-            widget.delete("1.0", "end")
-            widget.insert("end", self.log_cache)
-            widget.see("end")
-            widget.configure(state="disabled")
             self._show_metrics()
         except OSError:
             pass
@@ -365,7 +351,9 @@ class LiggghtsLauncher(tk.Tk):
             self.step_var.set("—")
         if m.particles is not None:
             self.particle_var.set(f"{m.particles:,}")
-        self.mesh_var.set(str(m.meshes) + (" (" + m.last_mesh + ")" if m.last_mesh != "—" else ""))
+        mesh_state = self.log_metrics.data if self.log_metrics.data.meshes > self.metrics.data.meshes else self.metrics.data
+        self.mesh_var.set(str(mesh_state.meshes) + (
+            " (" + mesh_state.last_mesh + ")" if mesh_state.last_mesh != "—" else ""))
         if m.rate is not None:
             self.rate_var.set(f"{m.rate:,.0f}")
         if m.eta is not None:
@@ -384,11 +372,25 @@ class LiggghtsLauncher(tk.Tk):
         if m.thermo:
             values = [(k,v) for k,v in m.thermo.items() if k.lower() != "step"][:7]
             self.thermo_var.set("    ".join(f"{k}: {v}" for k,v in values))
-        diag = m.diagnostic or self.metrics.data.diagnostic or self.log_metrics.data.diagnostic
+        self.warning_count_var.set(
+            f"Warnings: {max(self.metrics.data.warnings, self.log_metrics.data.warnings)}")
+        operation = m.last_operation
+        if operation == "No completed solver operation yet":
+            operation = (self.log_metrics.data.last_operation
+                         if self.log_metrics.data.last_operation != "No completed solver operation yet"
+                         else self.metrics.data.last_operation)
+        self.last_operation_var.set("Last completed operation: " + operation)
+        diag = (m.diagnostic or self.metrics.data.diagnostic or
+                self.log_metrics.data.diagnostic)
         if diag:
-            self.diagnostic_var.set("Last diagnostic: " + diag[:130])
-        elif m.warnings:
-            self.diagnostic_var.set(f"Warnings: {m.warnings}")
+            self.diagnostic_var.set("Diagnostic: " + diag[:230])
+            self.diagnostic_label.configure(fg="#a52a2a")
+        elif max(self.metrics.data.warnings, self.log_metrics.data.warnings):
+            self.diagnostic_var.set("Solver issued warnings — review the console or logs")
+            self.diagnostic_label.configure(fg="#8c4a12")
+        else:
+            self.diagnostic_var.set("No solver errors or warnings reported")
+            self.diagnostic_label.configure(fg="#356a47")
 
     def _resize_preview(self, _event=None) -> None:
         self.preview_label.configure(wraplength=max(350, self.winfo_width() - 100))
@@ -468,7 +470,11 @@ class LiggghtsLauncher(tk.Tk):
 
     def _append_line(self, message: str) -> None:
         self.console.configure(state="normal")
-        self.console.insert("end", message)
+        severity = line_severity(message)
+        if severity != "normal":
+            self.console.insert("end", message, severity)
+        else:
+            self.console.insert("end", message)
         if not message.endswith("\n"):
             self.console.insert("end", "\n")
         self.visible_lines += max(1, message.count("\n"))
@@ -520,7 +526,6 @@ class LiggghtsLauncher(tk.Tk):
         self.clock_start = time.monotonic()
         self.last_activity = None
         self.log_offset = 0
-        self.log_cache = ""
         self.log_pending_line = ""
         self.log_is_current = False
         self.solver_log_path = spec.working_directory / "log.lammps"
@@ -542,7 +547,10 @@ class LiggghtsLauncher(tk.Tk):
             self.progress_text.set("Progress unknown — no numeric run target")
         self.phase_var.set("Launching solver")
         self.thermo_var.set("Waiting for thermodynamic data...")
-        self.diagnostic_var.set("No diagnostics")
+        self.diagnostic_var.set("No solver errors or warnings reported")
+        self.warning_count_var.set("Warnings: 0")
+        self.last_operation_var.set("Last completed operation: none reported")
+        self.diagnostic_label.configure(fg="#356a47")
         self.stop_requested.clear()
         self.running = True
         self.last_log_path = log_path
@@ -642,6 +650,35 @@ class LiggghtsLauncher(tk.Tk):
             messagebox.showinfo("No folder", "Select a valid simulation input file first.", parent=self)
             return
         self._open_path(candidate.parent)
+
+    def _open_logs_menu(self) -> None:
+        """Keep log files available without requiring a second output pane."""
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(label="Open captured run log", command=self._open_log)
+        menu.add_command(label="Open LIGGGHTS log.lammps", command=self._open_native_log)
+        menu.add_separator()
+        menu.add_command(label="Open run_logs folder", command=self._open_logs_folder)
+        try:
+            menu.tk_popup(self.logs_button.winfo_rootx(),
+                          self.logs_button.winfo_rooty() + self.logs_button.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def _open_native_log(self) -> None:
+        path = self.solver_log_path
+        if path is None or not path.is_file():
+            messagebox.showinfo("Solver log", "No log.lammps file exists for the selected simulation.", parent=self)
+            return
+        if self.running and not self.log_is_current:
+            messagebox.showinfo("Solver log", "log.lammps has not been updated by this run yet. An older log may exist.", parent=self)
+            return
+        self._open_path(path)
+
+    def _open_logs_folder(self) -> None:
+        if self.last_log_path is None:
+            messagebox.showinfo("Logs", "Run a simulation to create a log folder.", parent=self)
+            return
+        self._open_path(self.last_log_path.parent)
 
     def _open_log(self) -> None:
         if self.last_log_path is None or not self.last_log_path.is_file():

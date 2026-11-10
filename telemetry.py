@@ -1,5 +1,5 @@
 """LIGGGHTS screen-output telemetry parser.
-Author: Mishal Mohanlal | v1.1.1
+Author: Mishal Mohanlal | v1.2.0
 """
 import re
 from dataclasses import dataclass,field
@@ -18,6 +18,7 @@ class Metrics:
     last_mesh: str = "—"
     warnings: int = 0
     diagnostic: str = ""
+    last_operation: str = "No completed solver operation yet"
     thermo: dict = field(default_factory=dict)
 
 class Telemetry:
@@ -38,12 +39,15 @@ class Telemetry:
             self.prev_step=self.prev_clock=None
             m.phase="Preparing run"
         if "Setting up run" in s: m.phase="Initializing DEM"
+        if s.startswith("Created orthogonal box"):
+            m.last_operation="Simulation domain created"
         if "Reading STL file" in s: m.phase="Reading geometry"
         if "Calculating the properties of the given template" in s: m.phase="Generating particle templates"
-        mesh=re.search(r"Import and parallelization of mesh\s+(\S+)\s+containing",s,re.I)
+        mesh=re.search(r"Import and parallelization of mesh\s+(\S+)\s+containing\s+(\d+)\s+triangle\(s\) successful",s,re.I)
         if mesh:
             m.meshes+=1
             m.last_mesh=mesh.group(1)
+            m.last_operation=f"Imported mesh {mesh.group(1)} ({mesh.group(2)} triangles)"
         if "WARNING:" in s.upper(): m.warnings+=1
         if any(x in s.lower() for x in ("error:", "fatal:", "aborting mpi_comm_world",
                                         "application aborted", "segmentation fault")):
@@ -59,6 +63,7 @@ class Telemetry:
             except (ValueError,IndexError):
                 return m
             m.step=step
+            m.last_operation=f"Thermodynamic sample received at step {step:,}"
             m.thermo=dict(zip(self.columns,words))
             for key,value in m.thermo.items():
                 if key.lower()=="atoms":
@@ -80,6 +85,7 @@ class Telemetry:
             self.prev_clock=now
         if s.startswith("Loop time of"):
             m.phase="Segment complete"
+            m.last_operation="Run segment completed"
             if m.target is not None: m.percent=100.;m.eta=0.
         return m
 
@@ -123,3 +129,15 @@ def prefer_metrics(console, solver_log):
     if solver_log.meshes > console.meshes:
         return solver_log
     return console
+
+def line_severity(text):
+    """Classification for console-only highlighting; does not claim error cause."""
+    line=text.upper()
+    if any(s in line for s in ("ERROR:", "FATAL:", "MPI_COMM_WORLD",
+                               "APPLICATION ABORTED", "SEGMENTATION FAULT", "ACCESS VIOLATION")):
+        return "error"
+    if "WARNING:" in line:
+        return "warning"
+    if " SUCCESSFUL" in line or line.startswith("LOOP TIME OF"):
+        return "success"
+    return "normal"
