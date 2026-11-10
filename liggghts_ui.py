@@ -339,7 +339,7 @@ class LiggghtsLauncher(tk.Tk):
     def _show_metrics(self):
         m = prefer_metrics(self.metrics.data, self.log_metrics.data)
         self.phase_var.set(m.phase)
-         mesh_state = self.log_metrics.data if self.log_metrics.data.meshes > self.metrics.data.meshes else self.metrics.data
+        mesh_state = self.log_metrics.data if self.log_metrics.data.meshes > self.metrics.data.meshes else self.metrics.data
         self.mesh_var.set(str(mesh_state.meshes) + (
             " (" + mesh_state.last_mesh + ")" if mesh_state.last_mesh != "—" else ""))
         if m.percent is not None:
