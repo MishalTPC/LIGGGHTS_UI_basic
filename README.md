@@ -3,7 +3,7 @@
 A Windows desktop launcher for running LIGGGHTS simulations without manually entering command-prompt commands.
 
 **Author:** Mishal Mohanlal  
-**Version:** 1.0.0  
+**Version:** 1.1.0  
 **Language:** Python 3 (Tkinter, standard library)
 
 ## Download the Windows application
@@ -11,7 +11,7 @@ A Windows desktop launcher for running LIGGGHTS simulations without manually ent
 1. Open the **Actions** tab in this repository.
 2. Select **Build Windows EXE**.
 3. Open the latest **successful** run on the main branch.
-4. Under **Artifacts**, download **LIGGGHTS_UI_basic_Windows_v1.0.0**.
+4. Under **Artifacts**, download **LIGGGHTS_UI_basic_Windows_v1.1.0**.
 5. Unzip it and double-click **LIGGGHTS_UI_basic.exe**.
 
 The generated program is a standalone Windows executable; no Python installation is needed to use it. GitHub may require a signed-in account to download workflow artifacts. Artifacts expire after 90 days; use **Run workflow** to build another.
@@ -72,3 +72,8 @@ For development, run **python liggghts_ui.py**. No third-party Python packages a
 ## Scope
 
 This is a launcher, not a LIGGGHTS solver, pre/post-processor, or model editor. Only launch simulations you trust: LIGGGHTS input files can contain commands that modify files or run external processes.
+
+
+## v1.1.0 live monitor
+
+The GUI now includes a live elapsed timer, solver phase, timestep, particle count, mesh import tracking, estimated timesteps per second, an ETA when available, and a progress bar. Metrics are extracted from emitted LIGGGHTS thermodynamic lines, not estimated from CPU usage. Without emitted thermo lines, progress and ETA remain unknown. Some MPI builds buffer screen output; live progress cannot be guaranteed. 'log.lammps' is available in a separate viewing tab and is read from the simulation directory. Captured command output is still saved under run_logs. An MPI abort is generally a symptom rather than a diagnosis.

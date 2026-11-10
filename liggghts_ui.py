@@ -1,7 +1,7 @@
 """Desktop GUI to launch LIGGGHTS simulations on Windows.
 
 Author: Mishal Mohanlal
-Version: 1.0.0
+Version: 1.1.0
 """
 from __future__ import annotations
 
@@ -11,11 +11,13 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from telemetry import Telemetry, input_target, hms
 from launcher_core import (
     APP_AUTHOR, APP_NAME, APP_VERSION, build_run_spec, command_as_text,
 )
@@ -62,8 +64,8 @@ class LiggghtsLauncher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"{APP_NAME}  |  v{APP_VERSION}")
-        self.geometry("1000x745")
-        self.minsize(790, 615)
+        self.geometry("1120x880")
+        self.minsize(850, 650)
         self.configure(bg=BG)
 
         saved = load_settings()
@@ -83,6 +85,25 @@ class LiggghtsLauncher(tk.Tk):
         self.running = False
         self.last_log_path: Path | None = None
         self.visible_lines = 0
+        self.metrics = Telemetry()
+        self.clock_start = None
+        self.last_activity = None
+        self.solver_log_path = None
+        self.log_cache = ""
+        self.log_offset = 0
+        self.phase_var = tk.StringVar(value="Idle")
+        self.elapsed_var = tk.StringVar(value="00:00:00")
+        self.step_var = tk.StringVar(value="—")
+        self.particle_var = tk.StringVar(value="—")
+        self.mesh_var = tk.StringVar(value="0")
+        self.rate_var = tk.StringVar(value="—")
+        self.eta_var = tk.StringVar(value="—")
+        self.progress_text = tk.StringVar(value="Waiting for timestep output")
+        self.progress_value = tk.DoubleVar(value=0)
+        self.thermo_var = tk.StringVar(value="Thermodynamic results will appear when the solver reports them.")
+        self.diagnostic_var = tk.StringVar(value="No diagnostics")
+        self.activity_var = tk.StringVar(value="No output received")
+        self.output_view = tk.StringVar(value="Console")
 
         self._configure_style()
         self._build_ui()
@@ -93,6 +114,7 @@ class LiggghtsLauncher(tk.Tk):
             var.trace_add("write", self._update_preview)
         self._update_preview()
         self.after(80, self._poll_events)
+        self.after(1000, self._dashboard_tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _configure_style(self) -> None:
@@ -118,7 +140,7 @@ class LiggghtsLauncher(tk.Tk):
         style.configure("TSpinbox", padding=5)
 
     def _build_ui(self) -> None:
-        outer = ttk.Frame(self, style="App.TFrame", padding=(22, 15))
+        outer = ttk.Frame(self, style="App.TFrame", padding=(15, 10))
         outer.pack(fill="both", expand=True)
 
         title_row = ttk.Frame(outer, style="App.TFrame")
@@ -131,13 +153,13 @@ class LiggghtsLauncher(tk.Tk):
                   text="Select your executable and input file, then run without the command prompt.",
                   style="App.TLabel").pack(anchor="w", pady=(2, 12))
 
-        paths = ttk.Frame(outer, style="Card.TFrame", padding=15)
+        paths = ttk.Frame(outer, style="Card.TFrame", padding=10)
         paths.pack(fill="x", pady=(0, 10))
         paths.columnconfigure(1, weight=1)
         self._path_field(paths, 0, "LIGGGHTS executable", self.exe_var, self._browse_exe)
         self._path_field(paths, 1, "Simulation input file", self.input_var, self._browse_input)
 
-        options = ttk.Frame(outer, style="Card.TFrame", padding=15)
+        options = ttk.Frame(outer, style="Card.TFrame", padding=10)
         options.pack(fill="x", pady=(0, 10))
         options.columnconfigure(4, weight=1)
         ttk.Label(options, text="Execution settings", style="Section.TLabel").grid(
@@ -167,7 +189,7 @@ class LiggghtsLauncher(tk.Tk):
                   style="Card.TLabel").grid(row=4, column=0, columnspan=5,
                                              sticky="w", pady=(8, 0))
 
-        command_frame = ttk.Frame(outer, style="Card.TFrame", padding=(15, 11))
+        command_frame = ttk.Frame(outer, style="Card.TFrame", padding=(10, 6))
         command_frame.pack(fill="x", pady=(0, 10))
         ttk.Label(command_frame, text="Command preview", style="Section.TLabel").pack(anchor="w")
         self.preview_label = tk.Label(command_frame, textvariable=self.command_var,
@@ -175,6 +197,8 @@ class LiggghtsLauncher(tk.Tk):
                                       anchor="w", wraplength=900, font=("Consolas", 9))
         self.preview_label.pack(fill="x", pady=(5, 0))
         self.bind("<Configure>", self._resize_preview)
+
+        self._build_dashboard(outer)
 
         controls = ttk.Frame(outer, style="App.TFrame")
         controls.pack(fill="x", pady=(0, 8))
@@ -194,6 +218,10 @@ class LiggghtsLauncher(tk.Tk):
         log_header = ttk.Frame(outer, style="App.TFrame")
         log_header.pack(fill="x", pady=(0, 5))
         ttk.Label(log_header, text="Simulation output", style="App.TLabel").pack(side="left")
+        ttk.Radiobutton(log_header,text="Live console",value="Console",
+                        variable=self.output_view,command=self._switch_view).pack(side="left",padx=12)
+        ttk.Radiobutton(log_header,text="log.lammps",value="Solver log",
+                        variable=self.output_view,command=self._switch_view).pack(side="left")
         self.status_label = ttk.Label(log_header, textvariable=self.status_var,
                                        style="App.TLabel")
         self.status_label.pack(side="right")
@@ -205,9 +233,112 @@ class LiggghtsLauncher(tk.Tk):
             state="disabled", height=12,
         )
         self.console.pack(fill="both", expand=True)
+        self.solver_log_widget = scrolledtext.ScrolledText(
+            outer,wrap="word",font=("Consolas",9),background="#101e32",
+            foreground="#d9e8f7",relief="flat",padx=11,pady=10,state="disabled")
+        self._switch_view()
         ttk.Label(outer, style="Footer.TLabel",
                   text="Working directory = input file's folder  |  All output is also saved to run_logs/  |  LIGGGHTS and MPI are not bundled").pack(
                       anchor="w", pady=(9, 0))
+
+    def _build_dashboard(self,parent):
+        panel=ttk.Frame(parent,style="Card.TFrame",padding=10)
+        panel.pack(fill="x",pady=(0,8))
+        heading=ttk.Frame(panel,style="Card.TFrame")
+        heading.pack(fill="x")
+        ttk.Label(heading,text="LIVE SIMULATION MONITOR",style="Section.TLabel").pack(side="left")
+        ttk.Label(heading,textvariable=self.phase_var,style="Section.TLabel").pack(side="right")
+        metrics=ttk.Frame(panel,style="Card.TFrame")
+        metrics.pack(fill="x",pady=(8,6))
+        items=[("ELAPSED",self.elapsed_var),("TIMESTEP",self.step_var),
+               ("PARTICLES",self.particle_var),("MESHES",self.mesh_var),
+               ("STEPS / SEC",self.rate_var),("ETA",self.eta_var)]
+        for i,(label,var) in enumerate(items):
+            metrics.columnconfigure(i,weight=1)
+            tile=tk.Frame(metrics,bg="#eaf2f9",padx=10,pady=7)
+            tile.grid(row=0,column=i,sticky="ew",padx=(0 if i==0 else 4,0))
+            tk.Label(tile,text=label,bg="#eaf2f9",fg="#536985",
+                     font=("Segoe UI Semibold",8)).pack(anchor="w")
+            tk.Label(tile,textvariable=var,bg="#eaf2f9",fg=BLUE,
+                     font=("Segoe UI Semibold",15)).pack(anchor="w")
+        progress_head=ttk.Frame(panel,style="Card.TFrame")
+        progress_head.pack(fill="x")
+        ttk.Label(progress_head,text="Run progress",style="Card.TLabel").pack(side="left")
+        ttk.Label(progress_head,textvariable=self.progress_text,
+                  style="Card.TLabel").pack(side="right")
+        ttk.Progressbar(panel,variable=self.progress_value,maximum=100).pack(
+            fill="x",pady=(4,8))
+        tk.Label(panel,textvariable=self.thermo_var,bg="#ffffff",fg=TEXT,
+                 anchor="w",font=("Consolas",9)).pack(fill="x")
+        row=ttk.Frame(panel,style="Card.TFrame")
+        row.pack(fill="x",pady=(7,0))
+        ttk.Label(row,textvariable=self.activity_var,style="Card.TLabel").pack(side="left")
+        ttk.Label(row,textvariable=self.diagnostic_var,style="Card.TLabel").pack(side="right")
+
+    def _switch_view(self):
+        if self.output_view.get()=="Solver log":
+            self.console.pack_forget()
+            self.solver_log_widget.pack(fill="both",expand=True)
+        else:
+            self.solver_log_widget.pack_forget()
+            self.console.pack(fill="both",expand=True)
+
+    def _dashboard_tick(self):
+        if self.running and self.clock_start is not None:
+            self.elapsed_var.set(hms(time.monotonic()-self.clock_start))
+            if self.last_activity is None:
+                self.activity_var.set("Awaiting output — the solver may be buffering")
+            else:
+                idle=int(time.monotonic()-self.last_activity)
+                self.activity_var.set(
+                    f"Last console output {idle}s ago"+(" (possibly buffered)" if idle>10 else ""))
+            self._read_solver_log()
+        self.after(1000,self._dashboard_tick)
+
+    def _read_solver_log(self):
+        path=self.solver_log_path
+        if path is None:
+            return
+        try:
+            size=path.stat().st_size
+            if size<self.log_offset:
+                self.log_offset=0
+                self.log_cache=""
+            if size==self.log_offset: return
+            with path.open("rb") as f:
+                f.seek(self.log_offset)
+                chunk=f.read(min(512000,size-self.log_offset))
+                self.log_offset=f.tell()
+            self.log_cache=(self.log_cache+chunk.decode("utf-8",errors="replace"))[-400000:]
+            widget=self.solver_log_widget
+            widget.configure(state="normal")
+            widget.delete("1.0","end")
+            widget.insert("end",self.log_cache)
+            widget.see("end")
+            widget.configure(state="disabled")
+        except OSError:
+            pass
+
+    def _read_metrics(self,line):
+        m=self.metrics.feed(line,time.monotonic())
+        self.phase_var.set(m.phase)
+        if m.step is not None: self.step_var.set(f"{m.step:,}")
+        if m.particles is not None: self.particle_var.set(f"{m.particles:,}")
+        self.mesh_var.set(str(m.meshes)+(" ("+m.last_mesh+")" if m.last_mesh!="—" else ""))
+        if m.rate is not None: self.rate_var.set(f"{m.rate:,.0f}")
+        if m.eta is not None: self.eta_var.set(hms(m.eta))
+        if m.percent is not None:
+            self.progress_value.set(m.percent)
+            self.progress_text.set(f"{m.percent:.1f}%")
+        else:
+            self.progress_text.set("Unknown until timestep data is available")
+        if m.thermo:
+            fields=[(k,v) for k,v in m.thermo.items() if k.lower()!="step"][:7]
+            self.thermo_var.set("    ".join(f"{k}: {v}" for k,v in fields))
+        if m.diagnostic:
+            self.diagnostic_var.set("Last diagnostic: "+m.diagnostic[:130])
+        elif m.warnings:
+            self.diagnostic_var.set(f"Warnings: {m.warnings}")
 
     def _resize_preview(self, _event=None) -> None:
         self.preview_label.configure(wraplength=max(350, self.winfo_width() - 100))
@@ -328,6 +459,28 @@ class LiggghtsLauncher(tk.Tk):
 
         self._save_settings()
         self._clear_output()
+        self.metrics=Telemetry()
+        try:
+            self.metrics=Telemetry(input_target(
+                spec.input_file.read_text(encoding="utf-8",errors="replace")))
+        except OSError:
+            pass
+        self.clock_start=time.monotonic()
+        self.last_activity=None
+        self.log_offset=0
+        self.log_cache=""
+        self.solver_log_path=spec.working_directory/"log.lammps"
+        self.elapsed_var.set("00:00:00")
+        self.step_var.set("—")
+        self.particle_var.set("—")
+        self.mesh_var.set("0")
+        self.rate_var.set("—")
+        self.eta_var.set("—")
+        self.progress_value.set(0)
+        self.progress_text.set("Waiting for timestep output")
+        self.phase_var.set("Launching solver")
+        self.thermo_var.set("Waiting for thermodynamic data...")
+        self.diagnostic_var.set("No diagnostics")
         self.stop_requested.clear()
         self.running = True
         self.last_log_path = log_path
@@ -381,22 +534,32 @@ class LiggghtsLauncher(tk.Tk):
                 break
             if event[0] == "line":
                 self._append_line(event[1])
+                self.last_activity=time.monotonic()
+                self._read_metrics(event[1])
             elif event[0] == "finished":
                 _, code, error, stopped, path = event
                 self.running = False
+                self._read_solver_log()
                 self.run_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
                 if error:
                     self.status_var.set("Failed")
+                    self.phase_var.set("Launch failed")
+                    self.diagnostic_var.set(str(error))
                     self._append_line(f"ERROR: {error}")
                 elif stopped:
                     self.status_var.set("Stopped")
+                    self.phase_var.set("Stopped")
                     self._append_line("Simulation stopped by user.")
                 elif code == 0:
                     self.status_var.set("Completed successfully")
+                    self.phase_var.set("Completed")
                     self._append_line("Simulation completed successfully (exit code 0).")
                 else:
                     self.status_var.set(f"Failed (exit code {code})")
+                    self.phase_var.set("Solver terminated")
+                    if not self.metrics.data.diagnostic:
+                        self.diagnostic_var.set("Nonzero exit; inspect solver log and full run log")
                     self._append_line(f"Simulation exited with code {code}.")
                 self._append_line(f"Full log: {path}")
         self.after(80, self._poll_events)
